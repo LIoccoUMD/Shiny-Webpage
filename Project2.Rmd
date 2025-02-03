@@ -1,0 +1,646 @@
+---
+title: "Project 2"
+author: "Luciano Iocco"
+date: "2024-12-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(shiny)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(plotly)
+library(maps)
+
+# Load the dataset
+hurricanes <- read.csv("hurricNamed.csv")
+
+# Data preparation
+cleaned_data <- hurricanes %>%
+  filter(!is.na(LF.WindsMPH) &
+           !is.na(LF.PressureMB) & !is.na(deaths))
+
+hurricane_trends <- cleaned_data %>%
+  group_by(Year) %>%
+  summarize(
+    hurricane_count = n(),
+    avg_wind_speed = mean(LF.WindsMPH, na.rm = TRUE),
+    avg_pressure = mean(LF.PressureMB, na.rm = TRUE),
+    avg_deaths = mean(deaths, na.rm = TRUE),
+    avg_damage = mean(BaseDam2014, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+hurricane_trends_long <- hurricane_trends %>%
+  pivot_longer(
+    cols = c(
+      hurricane_count,
+      avg_wind_speed,
+      avg_pressure,
+      avg_deaths,
+      avg_damage
+    ),
+    names_to = "Variable",
+    values_to = "Value"
+  )
+
+# UI
+ui <- fluidPage(
+  titlePanel("Hurricane Data Analysis"),
+  # Introduction
+  p(
+    "Hurricanes are among the most destructive natural disasters, leaving behind significant economic, environmental, and human impacts. ",
+    "This project aims to analyze patterns and trends in hurricane data to better understand their frequency, severity, and consequences. ",
+    "By leveraging the hurricNamed dataset, this analysis seeks to address key objectives:"
+  ),
+  tags$ul(
+    tags$li("Assess Economic Impact: Evaluate the economic damage caused by hurricanes, adjusted for 2014 USD, and identify factors influencing these outcomes."),
+    tags$li("Explore Mortality Patterns: Investigate the relationships between hurricane intensity metrics—such as wind speed and pressure—and the resulting death tolls."),
+    tags$li("Identify Geographical Trends: Map hurricane frequency and severity across U.S. states to determine which regions are most affected."),
+    tags$li("Analyze Gendered Naming Conventions: Examine whether the gender of hurricane names correlates with perceived severity or economic impact.")
+  ),
+  p(
+    "Through visualizations and statistical insights, this project aims to provide actionable findings that contribute to disaster preparedness, ",
+    "resource allocation, and a deeper understanding of hurricane impacts over time."
+  ),
+  sidebarLayout(
+    sidebarPanel(
+      h3("Overview Filters"),
+      selectInput(
+        inputId = "overview_variable",
+        label = "Select a variable to examine:",
+        choices = c(
+          "Wind Speed (MPH)" = "LF.WindsMPH",
+          "Wind Pressure (MB)" = "LF.PressureMB",
+          "Deaths" = "deaths",
+          "Year"
+        ),
+        selected = "LF.WindsMPH"
+      ),
+      actionButton(inputId = "generate_summary", label = "Generate Summary"),
+      verbatimTextOutput("summary")
+    ),
+    mainPanel(
+      tabsetPanel(
+        # Scatter panel
+        tabPanel(
+          "Pressure & Wind Speed",
+          sidebarPanel(
+            selectInput(
+              inputId = "scatter_x_var",
+              label = "Select X-axis Variable:",
+              choices = c("Wind Speed (MPH)" = "LF.WindsMPH", "Pressure (MB)" = "LF.PressureMB"),
+              selected = "LF.WindsMPH"
+            ),
+            selectInput(
+              inputId = "scatter_y_var",
+              label = "Select Y-axis Variable:",
+              choices = c("Deaths" = "deaths", "Economic Damage (USD)" = "BaseDam2014"),
+              selected = "deaths"
+            ),
+            checkboxInput("scatter_add_regression", "Add Regression Line", FALSE)
+          ),
+          mainPanel(
+            plotOutput("scatterPlot"),
+            p("Source: hurricNamed dataset"),
+            p(
+              "This scatter plot visualizes the relationship between two selected hurricane metrics, such as wind speed and deaths or pressure and economic damage. It provides an intuitive way to explore correlations between variables. Use the options to add a regression line and observe trends."
+            )
+          )
+        ),
+        # Trends panel
+        tabPanel(
+          "Trends Over Time",
+          sidebarPanel(
+            checkboxGroupInput(
+              inputId = "trends_variables",
+              label = "Select Variables:",
+              choices = c(
+                "Hurricane Count" = "hurricane_count",
+                "Average Wind Speed" = "avg_wind_speed",
+                "Average Pressure" = "avg_pressure",
+                "Average Deaths" = "avg_deaths",
+                "Average Damage" = "avg_damage"
+              ),
+              selected = "hurricane_count"
+            ),
+            sliderInput(
+              inputId = "trends_year_range",
+              label = "Select Year Range:",
+              min = min(hurricane_trends$Year, na.rm = TRUE),
+              max = max(hurricane_trends$Year, na.rm = TRUE),
+              value = c(
+                min(hurricane_trends$Year, na.rm = TRUE),
+                max(hurricane_trends$Year, na.rm = TRUE)
+              ),
+              step = 1
+            )
+          ),
+          mainPanel(
+            plotOutput("trendsPlot"),
+            p("Source: hurricNamed dataset"),
+            p(
+              "This graph shows how key hurricane metrics, like frequency, wind speed, and economic damage, change over time. By selecting different variables and adjusting the year range, you can explore patterns and trends in hurricane activity. This tool helps show how hurricanes have evolved and helps to identify periods of significant change."
+            )
+          )
+        ),
+        # Insight panel
+        tabPanel(
+          "Insights",
+          sidebarPanel(
+            selectInput(
+              inputId = "insight_variable",
+              label = "Select Variable for Insights:",
+              choices = c(
+                "Economic Damage (USD)" = "BaseDam2014",
+                "Forecasted Damage in 2014" = "NDAM2014"
+              )
+            ),
+            checkboxInput(
+              inputId = "insight_log_scale",
+              label = "Scale y-axis (Recommended)",
+              value = TRUE
+            )
+          ),
+          mainPanel(
+            plotlyOutput("insightPlot"),
+            p("Source: hurricNamed dataset"),
+            p(
+              "This graph highlights the economic damage caused by hurricanes over time, adjusted to 2014 USD for consistency. By visualizing trends, it allows you to spot years with significant losses and better understand the factors driving these changes. The option to use a logarithmic scale helps compare large and small values more effectively, making it easier to analyze patterns and variability in hurricane impacts."
+            )
+          )
+        ),
+        # Correlation Panel
+        tabPanel(
+          "Correlation Heatmap",
+          sidebarPanel(
+            checkboxGroupInput(
+              inputId = "heatmap_variables",
+              label = "Select Variables for Correlation:",
+              choices = c(
+                "Wind Speed (MPH)" = "LF.WindsMPH",
+                "Pressure (MB)" = "LF.PressureMB",
+                "Deaths" = "deaths",
+                "Economic Damage (USD)" = "BaseDam2014",
+                "Year" = "Year"
+              ),
+              selected = c("LF.WindsMPH", "LF.PressureMB", "deaths")
+            )
+          ),
+          mainPanel(
+            plotOutput("heatmapPlot"),
+            p("Source: hurricNamed dataset"),
+            p(
+              "This heatmap shows how different hurricane variables, like wind speed, pressure, and deaths, are related to each other. Darker colors indicate stronger positive or negative relationships, making it easy to spot patterns. Use this tool to explore which factors are closely connected and gain insights into how different metrics influence each other."
+            )
+          )
+        ),
+        # Geospatial panel
+tabPanel(
+  "Geospatial Map",
+  sidebarPanel(
+    selectInput(
+      inputId = "geo_states",
+      label = "Select States: ",
+      choices = c("florida", "louisiana","mississippi","new york","north carolina", "south carolina", "texas"),
+      selected = "florida",
+      multiple = TRUE
+    ),
+    sliderInput(
+      inputId = "geo_year_range",
+      label = "Select Year Range:",
+      min = min(hurricanes$Year, na.rm = TRUE),
+      max = max(hurricanes$Year, na.rm = TRUE),
+      value = c(
+        min(hurricanes$Year, na.rm = TRUE),
+        max(hurricanes$Year, na.rm = TRUE)
+      ),
+      step = 1
+    )
+  ),
+  mainPanel(
+    plotOutput("geoMap"),
+    p("Source: hurricNamed dataset"),
+    p(
+      "This map shows the distribution of hurricanes across the Atlantic Region, 
+      highlighting the number of hurricanes per state within the selected year range.
+      Select any state to get the map to appear, and once you have selected a state
+      in the Atlantic region that has experienced a hurricane within the selected
+      parameters, the legend will appear. Use backspace to remove a selected state."
+    )
+  )
+)
+
+      )
+    )
+  )
+)
+
+# Server
+server <- function(input, output) {
+  
+  state_mapping <- data.frame(
+  abbreviation = tolower(state.abb),
+  full_name = tolower(state.name),
+  stringsAsFactors = FALSE
+)
+
+# Replace abbreviations with full names in the dataset
+hurricanes <- hurricanes %>%
+  mutate(AffectedStates = tolower(AffectedStates)) %>%
+  left_join(state_mapping, by = c("AffectedStates" = "abbreviation")) %>%
+  mutate(AffectedStates = coalesce(full_name, AffectedStates)) %>%  # Use full names if available
+  select(-full_name)  # Drop the temporary column
+
+  
+  # Overview
+  selected_data <- reactive({
+    req(input$generate_summary)
+    isolate(hurricanes[[input$overview_variable]])
+  })
+  
+  output$summary <- renderPrint({
+    summary(selected_data())
+  })
+  
+  # Scatter Plot
+  output$scatterPlot <- renderPlot({
+    ggplot(hurricanes,
+           aes_string(x = input$scatter_x_var, y = input$scatter_y_var)) +
+      geom_point(alpha = 0.6, color = "blue") +
+      labs(
+        title = paste(input$scatter_x_var, " impact on", input$scatter_y_var),
+        # Can't dynamically have user-friendly var name.
+        x = input$scatter_x_var,
+        y = input$scatter_y_var
+      ) +
+      theme_minimal() +
+      if (input$scatter_add_regression) {
+        geom_smooth(method = "lm",
+                    se = FALSE,
+                    color = "red")
+      } else
+        NULL
+  })
+  
+  # Trends Over Time
+  filtered_trends <- reactive({
+    hurricane_trends_long %>%
+      filter(
+        Variable %in% input$trends_variables,
+        Year >= input$trends_year_range[1],
+        Year <= input$trends_year_range[2]
+      )
+  })
+  
+  output$trendsPlot <- renderPlot({
+    ggplot(filtered_trends(), aes(x = Year, y = Value, color = Variable)) +
+      geom_line(size = 1) +
+      geom_point(size = 2) +
+      labs(
+        title = "Hurricane Trends Over Time",
+        x = "Year",
+        y = "Value",
+        color = "Variable"
+      ) +
+      theme_minimal()
+  })
+  
+  # Insights
+  output$insightPlot <- renderPlotly({
+    gg <- ggplot(hurricanes,
+                 aes_string(x = "Year", y = input$insight_variable)) +
+      geom_line(color = "#bea8a7",
+                size = 1,
+                alpha = 0.8) +
+      geom_point(color = "#2a0800",
+                 size = 2,
+                 alpha = 0.5) +
+      labs(title = "Insights",
+           x = "Year",
+           y = input$insight_variable) +
+      theme_minimal()
+    
+    if (as.logical(input$insight_log_scale)) {
+      gg <- gg + scale_y_log10()
+    }
+    gg
+  })
+  # Correlation Heatmap
+  output$heatmapPlot <- renderPlot({
+    req(input$heatmap_variables)  # Ensure variables are selected
+    
+    selected_data <- hurricanes[, input$heatmap_variables, drop = FALSE]
+    
+    correlation_matrix <- cor(selected_data, use = "complete.obs")
+    
+    correlation_df <- as.data.frame(as.table(correlation_matrix))
+    colnames(correlation_df) <- c("Var1", "Var2", "Correlation")
+    
+    ggplot(correlation_df, aes(x = Var1, y = Var2, fill = Correlation)) +
+      geom_tile(color = "white") +
+      scale_fill_gradient2(
+        low = "blue",
+        high = "red",
+        mid = "white",
+        midpoint = 0,
+        limit = c(-1, 1),
+        space = "Lab",
+        name = "Correlation"
+      ) +
+      labs(title = "Correlation Heatmap", x = "Variable", y = "Variable") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            legend.position = "bottom")
+  })
+  # Geo spatial
+output$geoMap <- renderPlot({
+    req(input$geo_states, input$geo_year_range)
+
+    # Filter the dataset based on input
+    filtered_geo <- hurricanes %>%
+      filter(
+        !is.na(AffectedStates),
+        AffectedStates %in% tolower(input$geo_states),
+        Year >= input$geo_year_range[1],
+        Year <= input$geo_year_range[2]
+      ) %>%
+      group_by(AffectedStates) %>%
+      summarize(hurricane_count = n(), .groups = "drop")
+
+    # Prepare state map and merge with hurricane data
+    state_map <- map_data("state") %>%
+      mutate(region = tolower(region)) %>%
+      left_join(filtered_geo, by = c("region" = "AffectedStates"))
+
+    # Plot the geospatial map with latitude/longitude scale
+    ggplot(state_map,
+           aes(
+             x = long,
+             y = lat,
+             group = group,
+             fill = hurricane_count
+           )) +
+      geom_polygon(color = "white") +
+      scale_fill_gradient(
+        low = "lightblue",
+        high = "darkblue",
+        na.value = "gray50",
+        name = "Hurricane Count"
+      ) +
+      coord_quickmap() +
+      theme_minimal() +
+      labs(
+        title = "Geospatial Distribution of Hurricanes",
+        subtitle = "Highlighted states with hurricane activity",
+        fill = "Hurricanes",
+        x = "Longitude",   # Add X-axis label
+        y = "Latitude"     # Add Y-axis label
+      ) +
+      theme(
+        panel.grid.major = element_line(color = "gray", size = 0.5),  # Add gridlines
+        panel.grid.minor = element_blank()                            # Disable minor gridlines
+      )
+})
+
+
+  
+  
+}
+
+# Run the app
+shinyApp(ui, server)
+
+```
+
+## Beginning of Static Visualizations
+
+```{r}
+hurricanes <- read.csv("hurricNamed.csv")
+head(hurricanes)
+cat("Years:", range(hurricanes$Year), "\n")
+cat("Wind Speed (MPH):", range(hurricanes$LF.WindsMPH), "\n")
+cat("Pressure (MB):", range(hurricanes$LF.PressureMB), "\n")
+cat("Deaths:", range(hurricanes$deaths), "\n")
+```
+
+## Including Plots
+
+Now we'll look at some relationships between the variables. *Is pressure or Wind Speed more deathly?* The scatterplot below visualizes the relationship between the wind speed of hurricanes at landfall (measured in miles per hour, MPH) and the number of deaths caused by each hurricane. Wind speed is a critical indicator of a hurricane's intensity, and understanding how it correlates with the number of deaths can provide insights into how destructive hurricanes are in terms of human lives.
+
+```{r}
+ggplot(hurricanes, aes(x = LF.WindsMPH, y = deaths, colour = deaths)) +
+  geom_point() +
+  scale_color_gradient2(low = "chartreuse2",mid="darkorange", high = "firebrick3", midpoint= 900) +
+  labs(title = "Wind Speed (MPH) vs Deaths",
+       x = "Wind Speed (MPH)",
+       y = "Deaths",
+       color = "Deaths") + 
+  theme_minimal()
+```
+
+Most of the data points are clustered between 75 MPH and 125 MPH on the x-axis. Wind speed and deaths do not exhibit a clear, strong linear relationship, as many data points fall in the lower ranges of deaths (close to zero) for a variety of wind speeds. There is a single outlier at a wind speed of around 120 MPH, where the number of deaths is over 1500. This likely corresponds to a very devastating hurricane, highlighting that high wind speed alone doesn't necessarily correlate with high death tolls, but a very severe event can cause significant fatalities regardless of the wind speed. There was likely another impacting factor such as landfall, or preparedness that led to this dramatic increase in fatalities.
+
+```{r}
+ggplot(hurricanes, aes(x = LF.PressureMB, y = deaths, colour = deaths)) +
+  geom_point() +
+  scale_color_gradient2(low = "azure4",mid="blue2", high = "deeppink3", midpoint= 850) +
+  labs(title = "Wind Pressure (MB) vs Deaths",
+       x = "Wind Pressure (MB)",
+       y = "Deaths",
+       color = "Deaths") + 
+  theme_minimal()
+```
+
+This graph shows a weak correlation between wind pressure and deaths. Most of the data points are centered around 975 MB with few outliers. There is one obvious outlier with over 1500 deaths but the wind pressure was only around 920 MB. For most hurricanes, even those with lower wind pressures, around 950 MB and higher, the number of deaths seems to be relatively low.
+
+High wind pressures, \~1000 MB, generally show very few deaths. This indicates that hurricanes with higher pressure may not necessarily lead to higher fatalities. The relationship between wind pressure and deaths is not linear, suggesting that factors other than wind pressure (such as storm size, region, preparedness, etc.) play a more significant role in determining the death toll during hurricanes.
+
+------------------------------------------------------------------------
+
+*How does the frequency and severity of hurricanes vary across different states over time?*
+
+```{r}
+cleaned_data <- hurricanes |>
+  filter(!is.na(LF.WindsMPH) & !is.na(LF.PressureMB) & !is.na(deaths))
+
+hurricane_frequency <- cleaned_data |>
+  group_by(Year, AffectedStates) |>
+  summarize(hurricane_count = n(), .groups = "drop")
+```
+
+To make the graph more readable, only the top n states, n represents the number of hurricanes, where hurricanes occur the most frequently are shown. We can see that Florida appears frequently in the 1960s, 1980s, and 2000s, indicating that Florida has high hurricane activity. Texas and Louisiana also appear to experience hurricanes fairly frequently. North Carolina, Virginia, and New York are less frequently hit by hurricanes, although it seems to have increased in more recent years as apposed to around the 1960s.
+
+```{r}
+
+top_states <- hurricane_frequency |>
+  group_by(AffectedStates) |>
+  summarize(total_hurricanes = sum(hurricane_count)) |>
+  arrange(desc(total_hurricanes))
+
+top_n_states <- top_states |>
+  top_n(10, total_hurricanes)
+
+top_n_data <- hurricane_frequency |>
+  filter(AffectedStates %in% top_n_states$AffectedStates)
+
+ggplot(top_n_data, aes(x = Year, y = hurricane_count, fill = AffectedStates, alpha=0.4)) +
+  geom_col() +
+  labs(
+    title = "Top 10 States with the most Hurricane Activity",
+    x = "Year",
+    y = "Number of Hurricanes",
+    fill = "State",
+    caption = "Source: hurricNamed"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+------------------------------------------------------------------------
+
+In the 1960s, the number of hurricanes was somewhat consistent across the top states with no major peaks. Acrsoss the decades it is very clear that LA, and of course Florida, appear frequently suggesting that they are regularly affected by hurricanes. States like NY and SC indicate lower hurricane frequencies, making them a potentially safer and more calm environment to settle down in.
+
+*How do hurricanes affect different states in the Atlantic region and is there a pattern?*
+
+```{r}
+us_states <- map_data("state")
+
+heatmap_data <- data.frame(
+  region = c("florida", "texas", "california", "new york", "louisiana", "virginia"),
+  value = c(0, 1, 2, 3, 4,5)
+)
+
+state_map <- us_states |>
+  left_join(heatmap_data, by = c("region" = "region"))
+
+ggplot(state_map, aes(x = long, y = lat, group = group, fill = value)) +
+  geom_polygon(color = "white") +
+  scale_fill_gradient(low = "greenyellow", high = "red", na.value = "grey50") +
+  coord_quickmap() +
+  theme_void() +
+  ggtitle("Heatmap of Hurricane Frequency in the United States")
+
+```
+
+------------------------------------------------------------------------
+
+This plot provides insight into regional variations in hurricane damage, showing how some states experience a broader range of damage than others, and how certain years or storms may cause significantly more damage than the typical storm. To better understand regional differences, the density of economic damage for each state is shown over time across each regions. Hurricanes have a clear geographic pattern in the Atlantic region, affecting southern states like Florida, Texas, and Louisiana much more frequently than states further north or inland. This pattern is due to the location of these states within the Atlantic hurricane belt and their vulnerability to storms forming in the Gulf of Mexico or Atlantic Ocean.
+
+```{r}
+ggplot(cleaned_data, aes(x = BaseDam2014)) + 
+  geom_freqpoly(aes(colour = factor(AffectedStates), y = after_stat(density)), 
+                 binwidth = 225, na.rm = TRUE) +  
+  geom_density(aes(), alpha = 0.1, na.rm = TRUE) + 
+  xlim(0, 23000) +
+  ylim(0, 0.002) +
+  labs(
+    title = "Distribution of Economic Damage by State",
+    x = "Economic Damage (2014 USD)",
+    y = "Density",
+    fill = "State"
+  ) +
+  scale_fill_brewer(palette = "Set3") + 
+  theme_light() + 
+  theme(
+    legend.position = "bottom",
+    legend.key.size = unit(0.2, "in")
+  )
+
+
+```
+
+Florida (FL) shows the broadest range of damage, indicating it experiences both weaker and stronger hurricanes, leading to more varied damage outcomes. Louisiana (LA) and Texas (TX) show more concentrated damage distributions, with Texas displaying more extreme damage in some years, while Louisiana has less variation. North Carolina (NC) has the most concentrated lower damage values, indicating less severe hurricanes on average.
+
+------------------------------------------------------------------------
+
+To easily view the trends over time, below is a faceted plot examining the number of hurricanes, wind speed, pressure, deaths, and economic damage over the years. We have to reshape the data to long format in order to create a faceted plot.
+
+*How have the number of hurricanes, their severity, and the resulting deaths/economic damage changed over the years?*
+
+```{r}
+hurricane_trends <- cleaned_data |>
+  group_by(Year) |>
+  summarize(
+    hurricane_count = n(),
+    avg_wind_speed = mean(LF.WindsMPH, na.rm = TRUE),
+    avg_pressure = mean(LF.PressureMB, na.rm = TRUE),
+    avg_deaths = mean(deaths, na.rm = TRUE),
+    avg_damage = mean(BaseDam2014, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+hurricane_trends_long <- hurricane_trends |>
+  gather(key = "Variable", value = "Value", hurricane_count, avg_wind_speed, avg_pressure, avg_deaths, avg_damage)
+
+p <- ggplot(hurricane_trends_long, aes(x = Year, y = Variable, fill = Value)) +
+  geom_tile(color = "gray63") +
+  labs(
+    title = "Trends in Hurricane Frequency, Severity, and Impact Over Time",
+    x = "Year",
+    y = "Variable",
+    fill = "Value",
+    caption = "Source: Hurricane Data"
+  ) +
+  scale_fill_gradient2(low = "darkseagreen2", high = "violetred1",midpoint = 5, trans = "log", na.value="black") +
+  facet_wrap(~ Variable, scales = "free_y", ncol = 1) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.box = "vertical",
+        legend.text = element_text(size = 8),
+        legend.key.size = unit(0.6, "in"))
+
+# Display the plot
+print(p)
+
+
+```
+
+We can infer from the data that the average damage has a noticeable increase over time, especially starting from the 1980s and continuing forward into the 2000s. This trend is likely representative of the increased frequency of more intense hurricanes as well as things like urbanization and infrastructure being in the affected areas leading to more expensive repairs. The number of deaths shows a more random pattern. There is a slight period of higher deaths at the beginning of the 2000s. Despite the rise in frequency and damage, there doesn't appear to be a steady increase in deaths, which could be attributed to improved hurricane tracking technology. Wind speed seems to have a positive correlation with both damage and deaths. Hurricanes in the 1990s and 2000s are likely more intense, both in terms of wind speed and damage. The pressure doesn't appear to be a strong indicator of the overall impact of hurricanes. This supports the idea that while pressure can give some indication of storm strength, it doesn't explain the aftermath that occurs. The 2000s show a noticeable increase in the number of hurricanes, which likely reflects not only an increase in hurricane formation but like I previously mentioned, better hurricane tracking technology.
+
+------------------------------------------------------------------------
+
+I thought it would be interesting to see whether or not hurricanes with female names or male names tend to be more destructive.
+
+*Which gender hurricanes are generally more destructive?*
+
+```{r}
+ggplot(hurricanes, aes(x = mf, y = BaseDam2014, fill = mf)) +
+  geom_violin(trim = FALSE, alpha = 0.3) +
+  scale_y_log10(labels = scales::comma) +
+  labs(
+    title = "Distribution of Economic Damage by Hurricane Name Gender",
+    x = "Hurricane Name Gender",
+    y = "Economic Damage (2014 USD)",
+    fill = "Gender"
+  ) +
+  scale_fill_manual(values = c("f" = "deeppink", "m" = "cyan")) +
+  theme_minimal()
+
+```
+
+The distribution for female-named hurricanes appears to be more spread out, with a higher peak at lower damage values, and a wider tail extending towards more serious damage. This indicates that while most female-named hurricanes cause moderate to low damage, there are a few that cause significant destruction, leading to higher outliers. The distribution for male-named hurricanes also shows a broad spread with a peak at lower damage values, but the tail is shorter compared to female-named hurricanes. This suggests that male-named hurricanes generally cause less severe damage than female-named hurricanes, though there is still a range of severity.
+
+Female-named hurricanes appear to be slightly more destructive overall, as their distribution includes more extreme damage values, leading to higher potential outliers, even though the majority of both types of hurricanes fall into moderate damage categories. The longer tail for female-named hurricanes indicates that there may be more extreme storms in terms of damage compared to male-named hurricanes.
+
+Below is the exact same data in a box plot. I did this because I am inexperienced in reading violin plots but wanted to try something new.
+
+```{r}
+hurricanes <- hurricanes |> filter(BaseDam2014 > 0)
+ggplot(hurricanes, aes(x = mf, y = BaseDam2014, fill = mf)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_y_log10(labels = scales::comma) +
+  labs(
+    title = "Distribution of Economic Damage by Hurricane Name Gender",
+    x = "Hurricane Name Gender",
+    y = "Economic Damage (2014 USD)",
+    fill = "Gender"
+  ) +
+  scale_fill_manual(values = c("f" = "lightpink", "m" = "blue4")) +
+  theme_minimal()
+```
